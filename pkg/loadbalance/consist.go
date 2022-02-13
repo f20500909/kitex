@@ -18,6 +18,7 @@ package loadbalance
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strconv"
 	"sync"
@@ -88,6 +89,9 @@ type ConsistentHashOption struct {
 
 // NewConsistentHashOption creates a default ConsistentHashOption.
 func NewConsistentHashOption(f KeyFunc) ConsistentHashOption {
+
+	log.Println("NewConsistentHashOption")
+
 	return ConsistentHashOption{
 		GetKey:         f,
 		Replica:        0,
@@ -213,6 +217,11 @@ func (cp *consistPicker) getConsistResult(key uint64) *consistResult {
 
 func buildConsistResult(cb *consistBalancer, info *consistInfo, key uint64) *consistResult {
 	cr := &consistResult{}
+	// 这里没有找相等的，而是找大于的。
+	// for i := 0; i < len(info.virtualNodes); i++ {
+	// 	log.Println(" ", i, info.virtualNodes[i].hash)
+	// }
+
 	index := sort.Search(len(info.virtualNodes), func(i int) bool {
 		return info.virtualNodes[i].hash > key
 	})
@@ -396,25 +405,30 @@ func (cb *consistBalancer) buildVirtualNodes(rNodes []realNode) []virtualNode {
 	return ret
 }
 
+// build virtual nodes
 func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) []virtualNode {
 	if len(rNodes) == 0 {
 		return []virtualNode{}
 	}
 	vlen := 0
 	for i := range rNodes {
+		//                      10                   100
 		vlen += rNodes[i].Ins.Weight() * int(cb.opt.VirtualFactor)
 	}
 
+	//                           2000
 	ret := make([]virtualNode, vlen)
 	if vlen == 0 {
 		return ret
 	}
 	maxLen := 0
 	for i := range rNodes {
+		// TODO 优化 代码难看,使用 max
 		if len(rNodes[i].Ins.Address().String()) > maxLen {
 			maxLen = len(rNodes[i].Ins.Address().String())
 		}
 	}
+	// l-> length
 	l := maxLen + 1 + cb.opt.virtualFactorLen // "$address + # + itoa(i)"
 	// pre-allocate []byte here, and reuse it to prevent memory allocation
 	b := make([]byte, l)
@@ -432,7 +446,11 @@ func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) []virtua
 			b[j] = 0
 		}
 		b[len(bAddr)] = '#'
-		for j := 0; j < int(cb.opt.VirtualFactor)*ins.Weight(); j++ {
+
+		// len of cur
+		len := int(cb.opt.VirtualFactor) * ins.Weight()
+
+		for j := 0; j < len; j++ {
 			k := j
 			cnt := 0
 			// assign values to b one by one, starting with the last one
@@ -443,10 +461,11 @@ func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) []virtua
 			}
 			// at this point, the index inside ret should be cur + j
 			index := cur + j
+			log.Println("b: ", b,"cur :", cur,"j :", j,"index :", index)
 			ret[index].hash = xxhash.Sum64(b)
 			ret[index].RealNode = &rNodes[i]
 		}
-		cur += ins.Weight() * int(cb.opt.VirtualFactor)
+		cur += len
 	}
 	sort.Sort(&vNodeType{s: ret})
 	return ret
