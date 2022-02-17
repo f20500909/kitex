@@ -459,17 +459,15 @@ func (cb *consistBalancer) updateConsistInfo(e discovery.Result) {
 		return
 	}
 	info := infoI.(*consistInfo)
-	// warm up
-	// the reason for not modifying info directly is that there is no guarantee of concurrency security
+	// Warm up.
+	// The reason for not modifying info directly is that there is no guarantee of concurrency security.
 	info.cachedConsistResult.Range(func(key, value interface{}) bool {
-		cr := buildConsistResult(cb, newInfo, key.(uint64))
-		if cb.opt.ExpireDuration > 0 {
-			t := value.(*consistResult).Touch.Load().(time.Time)
-			if time.Now().After(t.Add(cb.opt.ExpireDuration)) {
-				return true
-			}
-			cr.Touch.Store(t)
+		t := value.(*consistResult).Touch.Load().(time.Time)
+		if cb.opt.ExpireDuration > 0 && time.Now().After(t.Add(cb.opt.ExpireDuration)) {
+			return true
 		}
+		cr := buildConsistResult(cb, newInfo, key.(uint64))
+		cr.Touch.Store(t)
 		newInfo.cachedConsistResult.Store(key, cr)
 		return true
 	})
