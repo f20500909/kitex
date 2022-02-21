@@ -18,7 +18,7 @@ package loadbalance
 
 import (
 	"context"
-	"sort"
+	// "sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -123,28 +123,23 @@ type consistResult struct {
 	Touch    atomic.Value
 }
 
+// type Element virtualNode
+
+// Implement the interface used in skiplist
+func (e virtualNode) ExtractKey() float64 {
+	return float64(e.hash) / float64(^uint(uint64(0)))
+}
+func (e virtualNode) String() string {
+	// return e.RealNode.discovery.Instance.Tag
+	return string(strconv.Itoa(int(e.hash)))
+}
+
 type consistInfo struct {
 	cachedConsistResult sync.Map
 	sfg                 singleflight.Group // To prevent multiple builds on the first request for the same key
 
 	realNodes    []realNode
-	virtualNodes []virtualNode
-}
-
-type vNodeType struct {
-	s []virtualNode
-}
-
-func (v *vNodeType) Len() int {
-	return len(v.s)
-}
-
-func (v *vNodeType) Less(i, j int) bool {
-	return v.s[i].hash < v.s[j].hash
-}
-
-func (v *vNodeType) Swap(i, j int) {
-	v.s[i], v.s[j] = v.s[j], v.s[i]
+	virtualNodes utils.SkipList
 }
 
 type consistPicker struct {
@@ -213,40 +208,49 @@ func (cp *consistPicker) getConsistResult(key uint64) *consistResult {
 
 func buildConsistResult(cb *consistBalancer, info *consistInfo, key uint64) *consistResult {
 	cr := &consistResult{}
-	index := sort.Search(len(info.virtualNodes), func(i int) bool {
-		return info.virtualNodes[i].hash > key
-	})
+
+	var ele virtualNode
+	ele.hash = key
+	node, _ := info.virtualNodes.FindGreaterOrEqual(ele);
+	// index = ele.hash
+
+	// index := sort.Search(len(info.virtualNodes), func(i int) bool {
+	// 	return info.virtualNodes[i].hash > key
+	// })
+
 	// Back to the ring head (although a ring does not have a head)
-	if index == len(info.virtualNodes) {
-		index = 0
-	}
-	cr.Primary = info.virtualNodes[index].RealNode.Ins
-	replicas := int(cb.opt.Replica)
-	// remove the primary node
-	if len(info.realNodes)-1 < replicas {
-		replicas = len(info.realNodes) - 1
-	}
-	if replicas > 0 {
-		used := make(map[discovery.Instance]struct{}, replicas) // should be 1 + replicas - 1
-		used[cr.Primary] = struct{}{}
-		cr.Replicas = make([]discovery.Instance, replicas)
-		for i := 0; i < replicas; i++ {
-			// find the next instance which is not used
-			// replicas are adjusted before so we can guarantee that we can find one
-			for {
-				index++
-				if index == len(info.virtualNodes) {
-					index = 0
-				}
-				ins := info.virtualNodes[index].RealNode.Ins
-				if _, ok := used[ins]; !ok {
-					used[ins] = struct{}{}
-					cr.Replicas[i] = ins
-					break
-				}
-			}
-		}
-	}
+	// if index == len(info.virtualNodes) {
+	// 	index = 0
+	// }
+	// t := node.GetValue()
+	cr.Primary = node.GetValue().RealNode.Ins
+	// cr.Primary = (*node).valueRealNode.Ins
+	// replicas := int(cb.opt.Replica)
+	// // remove the primary node
+	// if len(info.realNodes)-1 < replicas {
+	// 	replicas = len(info.realNodes) - 1
+	// }
+	// if replicas > 0 {
+	// 	used := make(map[discovery.Instance]struct{}, replicas) // should be 1 + replicas - 1
+	// 	used[cr.Primary] = struct{}{}
+	// 	cr.Replicas = make([]discovery.Instance, replicas)
+	// 	for i := 0; i < replicas; i++ {
+	// 		// find the next instance which is not used
+	// 		// replicas are adjusted before so we can guarantee that we can find one
+	// 		for {
+	// 			index++
+	// 			if index == len(info.virtualNodes) {
+	// 				index = 0
+	// 			}
+	// 			ins := info.virtualNodes[index].RealNode.Ins
+	// 			if _, ok := used[ins]; !ok {
+	// 				used[ins] = struct{}{}
+	// 				cr.Replicas[i] = ins
+	// 				break
+	// 			}
+	// 		}
+	// 	}
+	// }
 	return cr
 }
 
@@ -339,7 +343,7 @@ func (cb *consistBalancer) newConsistInfo(e discovery.Result) *consistInfo {
 	return ci
 }
 
-func (cb *consistBalancer) buildNodes(ins []discovery.Instance) ([]realNode, []virtualNode) {
+func (cb *consistBalancer) buildNodes(ine []discovery.Instance) ([]realNode, utils.SkipList) {
 	ret := make([]realNode, len(ins))
 	for i := range ins {
 		ret[i].Ins = ins[i]
@@ -350,10 +354,14 @@ func (cb *consistBalancer) buildNodes(ins []discovery.Instance) ([]realNode, []v
 	return ret, cb.buildVirtualNodes(ret)
 }
 
-func (cb *consistBalancer) buildVirtualNodes(rNodes []realNode) []virtualNode {
+func (cb *consistBalancer) buildVirtualNodes(rNodes []realNode) utils.SkipList {
 	// the total length is: len(realNodes) * VirtualFactor
 	vlen := len(rNodes) * int(cb.opt.VirtualFactor)
-	ret := make([]virtualNode, vlen)
+
+	// list.Insert(Element(i))
+	list.Insert(virtualNode(i))
+
+	ret := until.New()
 	if vlen == 0 {
 		return ret
 	}
@@ -388,24 +396,25 @@ func (cb *consistBalancer) buildVirtualNodes(rNodes []realNode) []virtualNode {
 			}
 			// At this point the index inside ret should be i * virtualFactor + j
 			index := i*int(cb.opt.VirtualFactor) + j
-			ret[index].hash = xxhash.Sum64(b)
-			ret[index].RealNode = &rNodes[i]
+			// ret[index].hash =
+			// ret[index].RealNode =
+
+			ele := virtualNode(xxhash.Sum64(b), &rNodes[i])
+			ret.Insert(ele)
 		}
 	}
-	sort.Sort(&vNodeType{s: ret})
 	return ret
 }
 
-func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) []virtualNode {
+func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) utils.SkipList {
 	if len(rNodes) == 0 {
-		return []virtualNode{}
+		return utils.New()
 	}
 	vlen := 0
 	for i := range rNodes {
 		vlen += rNodes[i].Ins.Weight() * int(cb.opt.VirtualFactor)
 	}
-
-	ret := make([]virtualNode, vlen)
+	ret := utils.New()
 	if vlen == 0 {
 		return ret
 	}
@@ -445,23 +454,25 @@ func (cb *consistBalancer) buildWeightedVirtualNodes(rNodes []realNode) []virtua
 			index := cur + j
 			ret[index].hash = xxhash.Sum64(b)
 			ret[index].RealNode = &rNodes[i]
+
+			ele := virtualNode(xxhash.Sum64(b), &rNodes[i])
+			ret.Insert(ele)
 		}
 		cur += ins.Weight() * int(cb.opt.VirtualFactor)
 	}
-	sort.Sort(&vNodeType{s: ret})
 	return ret
 }
 
 func (cb *consistBalancer) updateConsistInfo(e discovery.Result) {
-	newInfo := cb.newConsistInfo(e)
-	infoI, loaded := cb.cachedConsistInfo.LoadOrStore(e.CacheKey, newInfo)
+	infoI, loaded := cb.cachedConsistInfo.Load(e.CacheKey)
 	if !loaded {
 		return
 	}
-	info := infoI.(*consistInfo)
+	oldInfo := infoI.(*consistInfo)
+	newInfo := cb.newConsistInfo(e)
 	// Warm up.
 	// The reason for not modifying info directly is that there is no guarantee of concurrency security.
-	info.cachedConsistResult.Range(func(key, value interface{}) bool {
+	oldInfo.cachedConsistResult.Range(func(key, value interface{}) bool {
 		t := value.(*consistResult).Touch.Load().(time.Time)
 		if cb.opt.ExpireDuration > 0 && time.Now().After(t.Add(cb.opt.ExpireDuration)) {
 			return true
